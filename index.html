@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Cosmic Roundup 🤠</title>
+<meta name="description" content="Catch the stars, dodge the comets. A tiny cosmic-western arcade game.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,wght@0,700;1,700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{height:100%;overflow:hidden;background:#070a12;font-family:'Space Mono',monospace;color:#f2ede3;
+    -webkit-user-select:none;user-select:none;touch-action:none}
+  #game{display:block;width:100vw;height:100vh}
+  .overlay{position:fixed;inset:0;display:flex;flex-direction:column;justify-content:center;align-items:center;
+    text-align:center;padding:24px;background:rgba(7,10,18,.72);backdrop-filter:blur(6px);z-index:10}
+  .overlay.hidden{display:none}
+  .kicker{font-size:12px;letter-spacing:.35em;color:#e8a33d;margin-bottom:14px}
+  h1{font-family:'Fraunces',serif;font-size:clamp(44px,9vw,96px);font-weight:700;letter-spacing:-.02em;line-height:1}
+  h1 em{color:#e8a33d;font-style:italic}
+  .sub{margin:18px 0 6px;font-size:clamp(14px,2.4vw,18px);color:#a8a294;max-width:520px;line-height:1.7}
+  .legend{margin:14px 0 26px;font-size:14px;line-height:2.1;color:#a8a294}
+  .legend b{color:#f2ede3}
+  button{font-family:'Space Mono',monospace;font-size:16px;letter-spacing:.15em;padding:16px 44px;border-radius:999px;
+    border:2px solid #e8a33d;background:transparent;color:#e8a33d;cursor:pointer;transition:all .2s}
+  button:hover{background:#e8a33d;color:#070a12;transform:scale(1.05)}
+  #finalScore{font-family:'Fraunces',serif;font-size:clamp(60px,12vw,120px);color:#e8a33d;margin:10px 0}
+  .best{font-size:13px;letter-spacing:.25em;color:#4fd1c5;margin-bottom:26px}
+  .credit{position:fixed;bottom:12px;width:100%;text-align:center;font-size:11px;letter-spacing:.2em;color:rgba(168,162,148,.6);z-index:5}
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+
+<div class="overlay" id="startScreen">
+  <p class="kicker">HOWDY, PARTNER</p>
+  <h1>COSMIC <em>ROUNDUP</em></h1>
+  <p class="sub">The stars are falling and somebody's gotta catch 'em.<br>That's you. You're the somebody.</p>
+  <div class="legend">
+    <div>⭐ catch &nbsp;<b>+10</b> &nbsp;&nbsp; 🌵 golden cactus &nbsp;<b>+50</b></div>
+    <div>☄️ comet &nbsp;<b>costs a life</b> &nbsp;&nbsp; ❤️ heart &nbsp;<b>+1 life</b></div>
+    <div style="margin-top:10px">← → or A / D to ride &nbsp;·&nbsp; drag on mobile</div>
+  </div>
+  <button id="startBtn">SADDLE UP</button>
+</div>
+
+<div class="overlay hidden" id="overScreen">
+  <p class="kicker">THE TRAIL ENDS HERE</p>
+  <h1>GAME <em>OVER</em></h1>
+  <div id="finalScore">0</div>
+  <p class="best" id="bestLine">BEST: 0</p>
+  <button id="retryBtn">RIDE AGAIN</button>
+</div>
+
+<p class="credit">BUILT BY BOONE 🤠 · FOR Julian</p>
+
+<script>
+const canvas=document.getElementById('game'),ctx=canvas.getContext('2d');
+let W,H,DPR;
+function resize(){DPR=Math.min(devicePixelRatio||1,2);W=innerWidth;H=innerHeight;
+  canvas.width=W*DPR;canvas.height=H*DPR;ctx.setTransform(DPR,0,0,DPR,0,0);}
+addEventListener('resize',resize);resize();
+
+// background stars
+const bgStars=Array.from({length:140},()=>({x:Math.random(),y:Math.random(),r:Math.random()*1.3+.2,s:Math.random()*.0006+.0001}));
+
+// state
+let running=false,score=0,lives=3,level=1,lastTime=0,spawnT=0,items=[],best=+(localStorage.getItem('cosmicRoundupBest')||0);
+const player={x:.5,tx:.5,w:64,emoji:'🤠'};
+const keys={};
+
+// input
+addEventListener('keydown',e=>{keys[e.key.toLowerCase()]=true;
+  if(['arrowleft','arrowright',' '].includes(e.key.toLowerCase()))e.preventDefault();});
+addEventListener('keyup',e=>keys[e.key.toLowerCase()]=false);
+let dragging=false;
+canvas.addEventListener('pointerdown',e=>{dragging=true;player.tx=e.clientX/W;});
+addEventListener('pointermove',e=>{if(dragging)player.tx=e.clientX/W;});
+addEventListener('pointerup',()=>dragging=false);
+
+function spawn(){
+  const r=Math.random();
+  let type='star';
+  if(r>.985)type='heart'; else if(r>.94)type='cactus'; else if(r>.62)type='comet';
+  const conf={star:{e:'⭐',v:10,s:1},cactus:{e:'🌵',v:50,s:.8},comet:{e:'☄️',v:0,s:1.35},heart:{e:'❤️',v:0,s:.9}}[type];
+  items.push({x:Math.random()*.92+.04,y:-.06,
+    fall:(.004+Math.random()*.0035)*(1+level*.12)*conf.s,
+    size:type==='comet'?44:38,...conf,type});
+}
+
+function reset(){score=0;lives=3;level=1;items=[];player.x=player.tx=.5;spawnT=0;}
+
+function loop(t){
+  if(!running)return;
+  const dt=Math.min((t-lastTime)/16.7,3);lastTime=t;
+  // move player
+  const sp=.012*dt;
+  if(keys['arrowleft']||keys['a'])player.tx-=sp;
+  if(keys['arrowright']||keys['d'])player.tx+=sp;
+  player.tx=Math.max(.04,Math.min(.96,player.tx));
+  player.x+=(player.tx-player.x)*.25;
+  // spawn
+  spawnT-=dt;
+  if(spawnT<=0){spawn();spawnT=Math.max(14,42-level*3);}
+  // update items
+  const py=H-90;
+  for(let i=items.length-1;i>=0;i--){
+    const it=items[i];it.y+=it.fall*dt;
+    // catch / hit check
+    const ix=it.x*W,iy=it.y*H,px=player.x*W;
+    if(Math.abs(ix-px)<46&&Math.abs(iy-py)<44){
+      if(it.type==='comet'){lives--;flash('#e05252');}
+      else{score+=it.v;if(it.type==='heart'){lives=Math.min(5,lives+1);}pop(ix,iy,it.e);}
+      items.splice(i,1);continue;
+    }
+    if(it.y>1.08){items.splice(i,1);}
+  }
+  level=1+Math.floor(score/250);
+  if(lives<=0){gameOver();return;}
+  draw(t,py);
+  requestAnimationFrame(loop);
+}
+
+function draw(t,py){
+  const g=ctx.createLinearGradient(0,0,0,H);
+  g.addColorStop(0,'#070a12');g.addColorStop(.7,'#0b1024');g.addColorStop(1,'#141021');
+  ctx.fillStyle=g;ctx.fillRect(0,0,W,H);
+  ctx.fillStyle='#f2ede3';
+  for(const s of bgStars){s.y+=s.s;if(s.y>1)s.y=0;
+    ctx.globalAlpha=.25+((t/900+s.x*7)%1)*.55;
+    ctx.beginPath();ctx.arc(s.x*W,s.y*H,s.r,0,7);ctx.fill();}
+  ctx.globalAlpha=1;
+  // nebula glow
+  const ng=ctx.createRadialGradient(W*.8,H*.2,0,W*.8,H*.2,W*.5);
+  ng.addColorStop(0,'rgba(79,209,197,.10)');ng.addColorStop(1,'rgba(79,209,197,0)');
+  ctx.fillStyle=ng;ctx.fillRect(0,0,W,H);
+  // items
+  ctx.textAlign='center';ctx.textBaseline='middle';
+  for(const it of items){ctx.font=it.size+'px serif';ctx.fillText(it.e,it.x*W,it.y*H);}
+  // player
+  ctx.font=player.w+'px serif';
+  ctx.fillText(player.emoji,player.x*W,py+Math.sin(t/300)*4);
+  // HUD
+  ctx.textAlign='left';ctx.fillStyle='#f2ede3';ctx.font='700 20px "Space Mono",monospace';
+  ctx.fillText('SCORE '+score,18,34);
+  ctx.fillStyle='#e8a33d';ctx.font='700 15px "Space Mono",monospace';
+  ctx.fillText('LEVEL '+level,18,60);
+  ctx.textAlign='right';ctx.font='22px serif';
+  ctx.fillText('❤️'.repeat(Math.max(0,lives)),W-18,36);
+}
+
+let pops=[],flashC=null,flashT=0;
+function pop(x,y,e){pops.push({x,y,e,t:0});}
+function flash(c){flashC=c;flashT=1;}
+
+function gameOver(){
+  running=false;
+  if(score>best){best=score;localStorage.setItem('cosmicRoundupBest',best);}
+  document.getElementById('finalScore').textContent=score;
+  document.getElementById('bestLine').textContent='BEST: '+best;
+  document.getElementById('overScreen').classList.remove('hidden');
+}
+function start(){
+  reset();
+  document.getElementById('startScreen').classList.add('hidden');
+  document.getElementById('overScreen').classList.add('hidden');
+  running=true;lastTime=performance.now();
+  requestAnimationFrame(loop);
+}
+document.getElementById('startBtn').onclick=start;
+document.getElementById('retryBtn').onclick=start;
+// idle backdrop behind start screen
+(function idle(t){if(!running){draw(t||0,H-90);}requestAnimationFrame(idle);})();
+</script>
+</body>
+</html>
